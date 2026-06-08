@@ -1,0 +1,237 @@
+openapi: 3.1.0
+info:
+  title: AI Code Audit Flask API
+  description: Учебный REST API для домашнего задания по аудиту кода, рефакторингу и Docker deployment.
+  version: 1.0.0
+
+servers:
+  - url: http://127.0.0.1:8091
+    description: Локальный сервер разработки
+
+paths:
+  /health:
+    get:
+      summary: Проверка состояния сервиса
+      operationId: health
+      responses:
+        "200":
+          description: Сервис работает
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - status
+                properties:
+                  status:
+                    type: string
+                    example: ok
+
+  /adduser:
+    post:
+      summary: Создание пользователя
+      operationId: addUser
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - name
+                - email
+              properties:
+                name:
+                  type: string
+                  example: Alice
+                email:
+                  type: string
+                  format: email
+                  example: alice@example.com
+      responses:
+        "201":
+          description: Пользователь создан
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - message
+                  - user
+                properties:
+                  message:
+                    type: string
+                    example: user added
+                  user:
+                    $ref: "#/components/schemas/User"
+        "400":
+          description: Невалидные входные данные
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Email уже существует
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /user/{uid}:
+    get:
+      summary: Получение пользователя по ID
+      operationId: getUser
+      parameters:
+        - name: uid
+          in: path
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+          example: 1
+      responses:
+        "200":
+          description: Пользователь найден
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "400":
+          description: Некорректный ID
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Пользователь не найден
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /activate/{uid}:
+    post:
+      summary: Активация пользователя
+      description: Добавляет пользователя в список active users.
+      operationId: activateUser
+      parameters:
+        - name: uid
+          in: path
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+          example: 1
+      responses:
+        "200":
+          description: Пользователь активирован или уже был активен
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - message
+                  - user
+                properties:
+                  message:
+                    type: string
+                    enum:
+                      - user activated
+                      - user already active
+                  user:
+                    $ref: "#/components/schemas/User"
+        "400":
+          description: Некорректный ID
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Пользователь не найден
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /active:
+    get:
+      summary: Список active users
+      operationId: listActiveUsers
+      responses:
+        "200":
+          description: Список активных пользователей
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - users
+                properties:
+                  users:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/User"
+
+  /slow:
+    get:
+      summary: Имитация долгой задачи
+      description: Запускает фоновую задачу и сразу возвращает ответ.
+      operationId: slowTask
+      responses:
+        "202":
+          description: Задача принята к обработке
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - status
+                  - message
+                properties:
+                  status:
+                    type: string
+                    example: processing
+                  message:
+                    type: string
+                    example: task accepted
+
+  /wrong:
+    get:
+      summary: Демонстрация контролируемой ошибки
+      operationId: wrongEndpoint
+      responses:
+        "500":
+          description: Внутренняя ошибка сервера
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+components:
+  schemas:
+    User:
+      type: object
+      required:
+        - id
+        - name
+        - email
+      properties:
+        id:
+          type: integer
+          example: 1
+        name:
+          type: string
+          example: Alice
+        email:
+          type: string
+          format: email
+          example: alice@example.com
+
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          example: user not found
