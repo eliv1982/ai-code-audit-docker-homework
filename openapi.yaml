@@ -1,7 +1,14 @@
 openapi: 3.1.0
 info:
   title: AI Code Audit Flask API
-  description: Учебный REST API для домашнего задания по аудиту кода, рефакторингу и Docker deployment.
+  description: |
+    Учебный REST API для домашнего задания по аудиту кода, рефакторингу и Docker deployment.
+    Не предназначен для production.
+
+    - Пользователи хранятся в SQLite. Путь к файлу базы задаётся переменной окружения
+      `DATABASE_PATH` (по умолчанию `users.db`; в Docker-образе `/app/data/users.db`).
+    - Список active users хранится только в памяти процесса и теряется при перезапуске.
+    - Неожиданные ошибки базы данных возвращаются как JSON `500` без SQL и деталей исключения.
   version: 1.0.0
 
 servers:
@@ -30,6 +37,11 @@ paths:
   /adduser:
     post:
       summary: Создание пользователя
+      description: |
+        Тело запроса должно быть JSON-объектом с заголовком `Content-Type: application/json`.
+        Пробелы по краям `name` и `email` обрезаются. Email дополнительно приводится к
+        нижнему регистру до проверки уникальности и сохранения, поэтому `Case@Test.Example`
+        и `case@test.example` — один и тот же адрес.
       operationId: addUser
       requestBody:
         required: true
@@ -43,14 +55,21 @@ paths:
               properties:
                 name:
                   type: string
+                  minLength: 1
+                  description: Непустая строка; после обрезки пробелов по краям не должна быть пустой.
                   example: Alice
                 email:
                   type: string
+                  minLength: 1
                   format: email
+                  description: |
+                    Непустая строка. После обрезки и приведения к нижнему регистру проверяется
+                    простым шаблоном `local@domain.tld`: без пробелов, ровно один `@`,
+                    точка в доменной части. Полной проверки по RFC нет.
                   example: alice@example.com
       responses:
         "201":
-          description: Пользователь создан
+          description: Пользователь создан (в ответе email в нормализованном, нижнем регистре)
           content:
             application/json:
               schema:
@@ -65,17 +84,19 @@ paths:
                   user:
                     $ref: "#/components/schemas/User"
         "400":
-          description: Невалидные входные данные
+          description: Невалидные входные данные (не JSON-объект, пустые поля, неверные типы, неверный формат email)
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
         "409":
-          description: Email уже существует
+          description: Email уже существует (сравнение без учёта регистра)
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
 
   /user/{uid}:
     get:
@@ -85,9 +106,11 @@ paths:
         - name: uid
           in: path
           required: true
+          description: Положительное целое число, только цифры 0-9 (без знака, пробелов и подчёркиваний).
           schema:
             type: integer
             minimum: 1
+            maximum: 9223372036854775807
           example: 1
       responses:
         "200":
@@ -108,19 +131,26 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
 
   /activate/{uid}:
     post:
       summary: Активация пользователя
-      description: Добавляет пользователя в список active users.
+      description: |
+        Добавляет пользователя в список active users. Поддерживается только `POST`;
+        остальные методы (в том числе `GET`) не поддерживаются и вернут `405`.
+        Список active users хранится в памяти процесса и теряется при перезапуске.
       operationId: activateUser
       parameters:
         - name: uid
           in: path
           required: true
+          description: Положительное целое число, только цифры 0-9 (без знака, пробелов и подчёркиваний).
           schema:
             type: integer
             minimum: 1
+            maximum: 9223372036854775807
           example: 1
       responses:
         "200":
@@ -152,10 +182,16 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
 
   /active:
     get:
       summary: Список active users
+      description: |
+        Состояние хранится только в памяти процесса: после перезапуска приложения или
+        контейнера список пуст. Пользователи в SQLite при этом сохраняются
+        (в Docker — через том, смонтированный в `/app/data`).
       operationId: listActiveUsers
       responses:
         "200":
@@ -175,7 +211,11 @@ paths:
   /slow:
     get:
       summary: Имитация долгой задачи
-      description: Запускает фоновую задачу и сразу возвращает ответ.
+      description: |
+        Учебная демонстрация: запускает фоновую задачу в daemon-потоке того же процесса
+        и сразу возвращает ответ. Задача не сохраняется (not durable), может быть потеряна
+        при остановке процесса, число одновременных задач не ограничено. Не подходит для
+        production-нагрузки.
       operationId: slowTask
       responses:
         "202":
@@ -198,16 +238,23 @@ paths:
   /wrong:
     get:
       summary: Демонстрация контролируемой ошибки
+      description: Намеренно всегда возвращает `500` (внутри перехватывается деление на ноль).
       operationId: wrongEndpoint
       responses:
         "500":
-          description: Внутренняя ошибка сервера
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
+          $ref: "#/components/responses/InternalServerError"
 
 components:
+  responses:
+    InternalServerError:
+      description: Внутренняя ошибка сервера, в том числе неожиданная ошибка базы данных. SQL и детали исключения клиенту не раскрываются.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error: internal server error
+
   schemas:
     User:
       type: object
@@ -221,10 +268,13 @@ components:
           example: 1
         name:
           type: string
+          minLength: 1
           example: Alice
         email:
           type: string
+          minLength: 1
           format: email
+          description: Хранится и возвращается в нижнем регистре.
           example: alice@example.com
 
     ErrorResponse:

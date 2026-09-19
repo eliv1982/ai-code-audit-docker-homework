@@ -1,0 +1,22 @@
+# Version control and local environments
+.git
+.venv
+.env
+
+# Python bytecode and caches (at any depth)
+**/__pycache__
+**/*.pyc
+.pytest_cache
+.mypy_cache
+.ruff_cache
+
+# Local SQLite database and sidecar files (at any depth)
+**/*.db
+**/*.db-*
+
+# Editor and OS artifacts
+.vscode
+.idea
+*.swp
+*.tmp
+.DS_Store

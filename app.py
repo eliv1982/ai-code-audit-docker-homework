@@ -4,18 +4,31 @@ import re
 import sqlite3
 import threading
 import time
+from contextlib import closing
+from pathlib import Path
 from typing import Any
 
 from flask import Flask, Response, g, jsonify, request
 
 logger = logging.getLogger(__name__)
 
-DATABASE_PATH = "users.db"
+DEFAULT_DATABASE_PATH = "users.db"
 DEFAULT_PORT = 8091
 SLOW_TASK_DELAY_SEC = 5
-EMAIL_PATTERN = re.compile(r"^[^@]+@[^@]+\.[^@]+$")
+# Lightweight check: no whitespace, exactly one "@", and a dot in the domain.
+EMAIL_PATTERN = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
+# ASCII digits only (no sign, spaces or underscores). 19 digits keeps int()
+# cheap; the bound below is the largest value SQLite can store as INTEGER.
+USER_ID_PATTERN = re.compile(r"[0-9]{1,19}")
+MAX_USER_ID = 2**63 - 1
+
+
+def database_path_from_env() -> str:
+    return os.environ.get("DATABASE_PATH") or DEFAULT_DATABASE_PATH
+
 
 app = Flask(__name__)
+app.config["DATABASE_PATH"] = database_path_from_env()
 
 _active_users_lock = threading.Lock()
 _active_users: list[dict[str, Any]] = []
@@ -23,7 +36,7 @@ _active_users: list[dict[str, Any]] = []
 
 def get_db() -> sqlite3.Connection:
     if "db" not in g:
-        g.db = sqlite3.connect(DATABASE_PATH)
+        g.db = sqlite3.connect(app.config["DATABASE_PATH"])
         g.db.row_factory = sqlite3.Row
     return g.db
 
@@ -35,8 +48,26 @@ def close_db(_exception: BaseException | None) -> None:
         db.close()
 
 
+def internal_error_response() -> tuple[Response, int]:
+    return jsonify(error="internal server error"), 500
+
+
+@app.errorhandler(sqlite3.Error)
+def handle_database_error(exc: sqlite3.Error) -> tuple[Response, int]:
+    # Unexpected database failures (unopenable file, missing table, ...) stay
+    # JSON like the rest of the API. Details go to the server log only; the
+    # client never sees SQL text or exception messages. Expected conditions
+    # (400/404/409) are returned by the views themselves and never reach here.
+    logger.error("unexpected database error", exc_info=exc)
+    return internal_error_response()
+
+
 def init_db() -> None:
-    with sqlite3.connect(DATABASE_PATH) as conn:
+    database_path = app.config["DATABASE_PATH"]
+    # The data directory (e.g. /app/data in Docker) must exist before SQLite
+    # can create the database file inside it.
+    Path(database_path).parent.mkdir(parents=True, exist_ok=True)
+    with closing(sqlite3.connect(database_path)) as conn:
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS users (
@@ -50,11 +81,10 @@ def init_db() -> None:
 
 
 def parse_user_id(uid: str) -> int | None:
-    try:
-        user_id = int(uid)
-    except ValueError:
+    if not USER_ID_PATTERN.fullmatch(uid):
         return None
-    if user_id < 1:
+    user_id = int(uid)
+    if not 1 <= user_id <= MAX_USER_ID:
         return None
     return user_id
 
@@ -75,9 +105,10 @@ def validate_user_payload(
         return None, "email must be a non-empty string"
 
     name = name.strip()
-    email = email.strip()
+    # Emails are stored lowercased so duplicates are detected case-insensitively.
+    email = email.strip().lower()
 
-    if not EMAIL_PATTERN.match(email):
+    if not EMAIL_PATTERN.fullmatch(email):
         return None, "email format is invalid"
 
     return (name, email), None
@@ -153,7 +184,7 @@ def get_user(uid: str) -> tuple[Response, int]:
     return jsonify(row_to_user(row)), 200
 
 
-@app.route("/activate/<uid>", methods=["GET", "POST"])
+@app.route("/activate/<uid>", methods=["POST"])
 def activate(uid: str) -> tuple[Response, int]:
     user_id = parse_user_id(uid)
     if user_id is None:
@@ -181,6 +212,9 @@ def list_active() -> tuple[Response, int]:
 
 @app.route("/slow")
 def slow() -> tuple[Response, int]:
+    # Educational demo only: an in-process daemon thread. The task is not
+    # durable, is lost if the process stops, and there is no limit on how many
+    # can run at once. Not a pattern for real background workloads.
     thread = threading.Thread(target=run_slow_task, daemon=True)
     thread.start()
     return jsonify(status="processing", message="task accepted"), 202
@@ -192,15 +226,15 @@ def wrong() -> tuple[Response, int]:
         _ = 10 / 0
     except ZeroDivisionError:
         logger.exception("controlled error demonstration")
-        return jsonify(error="internal server error"), 500
+        return internal_error_response()
 
     return jsonify(), 200
 
 
-init_db()
-
-
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
+    # Not run at import time, so importing this module (tests, tooling) never
+    # touches the filesystem.
+    init_db()
     port = int(os.environ.get("PORT", DEFAULT_PORT))
     app.run(host="0.0.0.0", port=port, debug=False)

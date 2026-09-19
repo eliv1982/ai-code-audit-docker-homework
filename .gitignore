@@ -1,6 +1,9 @@
 .venv/
 __pycache__/
 *.pyc
-users.db
 .env
 .DS_Store
+
+# Local SQLite database and its sidecar files (-journal, -wal, -shm)
+*.db
+*.db-*

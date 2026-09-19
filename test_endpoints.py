@@ -1,4 +1,8 @@
-"""Smoke-test for the running Flask API."""
+"""Live smoke-test for an already running Flask API.
+
+Needs a running server (see API_BASE_URL) and leaves its timestamped test user
+in that server's database. Isolated regression tests live in test_app.py.
+"""
 
 import os
 import sys
@@ -148,7 +152,7 @@ def main() -> int:
         body = parse_json(response)
         results.append(
             report(
-                "GET /wrong",
+                "GET /wrong (expected 500)",
                 response.status_code == 500 and "error" in body,
                 f"status={response.status_code}, body={body}",
             )
